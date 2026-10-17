@@ -103,7 +103,7 @@ if "agents" not in st.session_state:
         {"name": "哲学家", "prompt": "悲观，虚无主义", "avatar": "🗿"},
         {"name": "杠精", "prompt": "暴躁，反驳一切", "avatar": "😡"},
         {"name": "萌妹", "prompt": "可爱，爱发颜文字", "avatar": "🐱"},
-        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar":🫥"},
+        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar":"🫥"},
     ]
 
 # [新增] 私聊冷却记录：(target_ai, requester) -> 上次回复后的 messages 长度
