@@ -120,7 +120,7 @@ with st.sidebar:
 
     new_name = st.text_input("名字", placeholder="例如：嘉豪")
     new_prompt = st.text_area("性格/人设", placeholder="例如：喜欢吹嘘自己没做过的事，蹩脚英文")
-    new_avatar = st.selectbox("选择头像", "😇","😋", "🥸", "😶", "🤠", "😭", "😖", "🍟", "🤬"])
+    new_avatar = st.selectbox("选择头像", ["😇","😋", "🥸", "😶", "🤠", "😭", "😖", "🍟", "🤬"])
 
     if st.button("⚡ 注入灵魂 (创建)", type="primary"):
         if new_name and new_prompt:
