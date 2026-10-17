@@ -39,7 +39,6 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False):
         ])
 
         if reply_mode:
-            # [新增] 私聊模式：忽略话题，只针对 @自己 的人
             system_content = (
                 f"{system_prompt}\n\n"
                 f"【私聊模式 · 最高优先级】"
@@ -74,7 +73,6 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False):
         )
         content = response.choices[0].message.content.strip()
 
-        # 兜底：模型忘了 @，代码补上
         if reply_to and not content.startswith(f"@{reply_to}"):
             content = f"@{reply_to} {content}"
 
@@ -85,6 +83,44 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False):
 
 def render_content(content):
     return re.sub(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', r'**@\1**', content)
+
+
+# ==========================================
+# [新增] 活跃度统计 & 加权抽取
+# ==========================================
+def recent_activity(name, messages, window=8):
+    """统计某角色在最近 window 条消息里说了几次话。"""
+    return sum(1 for m in messages[-window:] if m.get("name") == name)
+
+
+def pick_agent_weighted(agents, messages, exclude_name=None, window=8):
+    """
+    加权随机：
+    - 最近 window 条里发言次数越多，权重越低；
+    - 排除上一条发言者（除非只剩一个 AI）。
+    """
+    if not agents:
+        return None
+
+    counts = {}
+    for m in messages[-window:]:
+        n = m.get("name", "")
+        counts[n] = counts.get(n, 0) + 1
+
+    candidates, weights = [], []
+    for a in agents:
+        if exclude_name and a["name"] == exclude_name and len(agents) > 1:
+            continue
+        c = counts.get(a["name"], 0)
+        # 1 次发言 → 权重 1/3；2 次 → 1/5；没发言 → 1
+        w = 1.0 / (1.0 + c * 2.0)
+        candidates.append(a)
+        weights.append(w)
+
+    if not candidates:
+        candidates, weights = agents, [1.0] * len(agents)
+
+    return random.choices(candidates, weights=weights, k=1)[0]
 
 
 # ==========================================
@@ -103,10 +139,9 @@ if "agents" not in st.session_state:
         {"name": "哲学家", "prompt": "悲观，虚无主义", "avatar": "🗿"},
         {"name": "杠精", "prompt": "暴躁，反驳一切", "avatar": "😡"},
         {"name": "萌妹", "prompt": "可爱，爱发颜文字", "avatar": "🐱"},
-        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar":"🫥"},
+        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar": "🫥"},
     ]
 
-# [新增] 私聊冷却记录：(target_ai, requester) -> 上次回复后的 messages 长度
 if "reply_cooldown" not in st.session_state:
     st.session_state.reply_cooldown = {}
 
@@ -120,7 +155,7 @@ with st.sidebar:
 
     new_name = st.text_input("名字", placeholder="例如：嘉豪")
     new_prompt = st.text_area("性格/人设", placeholder="例如：喜欢吹嘘自己没做过的事，蹩脚英文")
-    new_avatar = st.selectbox("选择头像", ["😇","😋", "🥸", "😶", "🤠", "😭", "😖", "🍟", "🤬"])
+    new_avatar = st.selectbox("选择头像", ["😇", "😋", "🥸", "😶", "🤠", "😭", "😖", "🍟", "🤬"])
 
     if st.button("⚡ 注入灵魂 (创建)", type="primary"):
         if new_name and new_prompt:
@@ -142,7 +177,6 @@ with st.sidebar:
             st.caption(f"{a['avatar']} {a['name']}")
         with col2:
             if st.button("🗑️", key=f"del_agent_{i}", help=f"删除 {a['name']}"):
-                # [新增] 清理与该角色相关的冷却记录
                 st.session_state.reply_cooldown = {
                     k: v for k, v in st.session_state.reply_cooldown.items()
                     if k[0] != a["name"] and k[1] != a["name"]
@@ -183,41 +217,68 @@ if st.button("⏱️ 推动时间 (让 AI 发一条贴)", type="primary", use_co
     else:
         current_count = len(st.session_state.messages)
         agent = None
-        use_private_chat = False
         requester = None
         last_content = ""
 
-        # [新增] 步骤1：最新消息里是否 @ 了某个在线 AI？
+        # ---------- 步骤 1：检查最新消息是否 @ 了在线 AI ----------
         if st.session_state.messages:
             last_msg = st.session_state.messages[-1]
             last_content = last_msg.get("content", "")
             last_name = last_msg.get("name", "")
+
             if last_name and last_name not in ["System", "Unknown"]:
-                mentioned = re.findall(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', last_content)
+                mentioned = set(re.findall(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', last_content))
+                candidates = []
+
                 for m in mentioned:
                     for a in st.session_state.agents:
-                        if a["name"] == m and a["name"] != last_name:
-                            key = (a["name"], last_name)
-                            last_reply = st.session_state.reply_cooldown.get(key, -100)
-                            if current_count - last_reply >= 5:
-                                # 冷却已过，强制私聊
-                                agent = a
-                                requester = last_name
-                                use_private_chat = True
+                        if a["name"] != m or a["name"] == last_name:
+                            continue
+
+                        # 冷却检查
+                        key = (a["name"], last_name)
+                        last_reply = st.session_state.reply_cooldown.get(key, -100)
+                        if current_count - last_reply < 5:
                             break
-                    if agent:
+
+                        # [新增] 活跃度检查：最近 6 条里已出现 ≥2 次，就跳过本次强制
+                        # 只在 AI 数量 > 2 时生效，避免人少时没人回复
+                        if len(st.session_state.agents) > 2:
+                            if recent_activity(a["name"], st.session_state.messages, window=6) >= 2:
+                                break
+
+                        candidates.append(a)
                         break
 
-        # 步骤2：非私聊，走原逻辑
-        if agent is None:
-            agent = random.choice(st.session_state.agents)
-            reply_to = None
+                if candidates:
+                    # [新增] 多个被 @ 时，优先回应最近最不活跃的
+                    agent = min(
+                        candidates,
+                        key=lambda x: recent_activity(x["name"], st.session_state.messages, window=8)
+                    )
+                    requester = last_name
 
+        # ---------- 步骤 2：没有强制私聊 → 加权随机抽人 ----------
+        if agent is None:
+            # [新增] 排除上一条发言者，防止连续同一人
+            exclude = None
+            if st.session_state.messages:
+                last_name_for_exclude = st.session_state.messages[-1].get("name", "")
+                if last_name_for_exclude not in ["System", "Unknown"]:
+                    exclude = last_name_for_exclude
+
+            agent = pick_agent_weighted(
+                st.session_state.agents,
+                st.session_state.messages,
+                exclude_name=exclude,
+                window=8
+            )
+
+            reply_to = None
             if st.session_state.messages:
                 last_msg = st.session_state.messages[-1]
                 last_name = last_msg.get("name", "")
                 if last_name and last_name not in ["System", "Unknown"] and last_name != agent["name"]:
-                    # [新增] 如果该 AI 刚被 last_name 私聊过且还在冷却，则不许普通接话
                     key = (agent["name"], last_name)
                     last_reply = st.session_state.reply_cooldown.get(key, -100)
                     if current_count - last_reply >= 5 and random.random() < 0.4:
@@ -238,7 +299,7 @@ if st.button("⏱️ 推动时间 (让 AI 发一条贴)", type="primary", use_co
                     reply_mode=False
                 )
         else:
-            # [新增] 私聊模式：上下文只给 A@B 那一条（记忆 ≤ 2 条）
+            # ---------- 步骤 3：私聊模式 ----------
             with st.spinner(f"{agent['name']} 正在私聊回复 @{requester}..."):
                 reply = llm_generate(
                     f"你是{agent['name']}，性格：{agent['prompt']}",
@@ -246,7 +307,6 @@ if st.button("⏱️ 推动时间 (让 AI 发一条贴)", type="primary", use_co
                     reply_to=requester,
                     reply_mode=True
                 )
-            # [新增] 记录冷却（加入这条回复后，messages 长度会 +1）
             st.session_state.reply_cooldown[(agent["name"], requester)] = current_count + 1
 
         st.session_state.messages.append({
@@ -276,6 +336,5 @@ with col2:
                 "content": f"📢 上帝更改了话题：{new_topic}",
                 "avatar": "🌩️"
             })
-            # [新增] 话题重置 → 冷却也清空（否则旧索引会永远不满足）
             st.session_state.reply_cooldown = {}
             st.rerun()
