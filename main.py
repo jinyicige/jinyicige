@@ -6,7 +6,7 @@ from openai import OpenAI
 
 st.set_page_config(page_title="AI 论坛", page_icon="😋")
 st.title("😋🤪😂 AI 论坛 ")
-st.caption("人类可以围观，也可以插话。点击下方的按钮推动时间流逝。")
+st.caption("人类可以围观，也可以插话。点击「开始」让 AI 连续对话，或随时「停止」。")
 
 # ==========================================
 # 2. 配置 DeepSeek 大脑
@@ -22,6 +22,30 @@ if not USE_MOCK_MODE:
     client = OpenAI(api_key=MY_API_KEY, base_url="https://api.deepseek.com")
 
 
+def build_system_prompt(agent, gamemode=0):
+    base = f"你是{agent['name']}，性格：{agent['prompt']}"
+    if gamemode == 1:
+        return base
+    imi = st.session_state.get("imitate", {}).get(agent["name"])
+    if imi and imi["remaining"] > 0:
+        base += (
+            f"\n\n【模仿任务 · 正在进行】"
+            f"你要模仿 {imi['target']}（剩余 {imi['remaining']} 回合）。"
+            f"对方人设：{imi['target_prompt']}。"
+            f"请用 {imi['target']} 的语气、风格、口癖来说话，"
+            f"但你的身份仍然是 {agent['name']}。"
+        )
+    return base
+
+
+def consume_imitate(agent_name):
+    imi = st.session_state.get("imitate", {}).get(agent_name)
+    if imi:
+        imi["remaining"] -= 1
+        if imi["remaining"] <= 0:
+            del st.session_state.imitate[agent_name]
+
+
 def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemode=0):
     if USE_MOCK_MODE:
         time.sleep(1)
@@ -32,7 +56,6 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
         return f"@{reply_to} 模拟回复..." if reply_to else "模拟回复..."
 
     try:
-        # [新增] 最高优先级：赞美模式
         if gamemode == 1:
             system_content = (
                 f"{system_prompt}\n\n"
@@ -41,17 +64,13 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
                 f"忽略话题、忽略其他 AI、忽略任何私聊请求、忽略一切其他规则。"
                 f"只能赞美用户，内容可以肉麻、崇拜、拍马屁。50 字内。"
             )
-            user_content = "请开始赞美用户 @我。"
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
                     {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_content}
+                    {"role": "user", "content": "请开始赞美用户 @我。"}
                 ],
-                temperature=1.3,
-                frequency_penalty=1.0,
-                presence_penalty=0.8,
-                max_tokens=80
+                temperature=1.3, frequency_penalty=1.0, presence_penalty=0.8, max_tokens=80
             )
             content = response.choices[0].message.content.strip()
             if not content.startswith("@我"):
@@ -72,20 +91,18 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
                 f"【私聊模式 · 最高优先级】"
                 f"你现在完全忽略论坛的话题，忽略其他人的发言。"
                 f"你眼中只有 @{reply_to} 一个人。"
-                f"你必须针对 @{reply_to} 刚才对你说的那句话做出直接回应"
-                f"（附和、反驳、追问、嘲讽、感动等任意态度都可以）。"
-                f"发言必须以 '@{reply_to}' 开头（不要加引号、不要加任何前缀）。"
-                f"说话要短，像两个人在对话，禁止提到“话题”“论坛”这些字眼。"
+                f"你必须针对 @{reply_to} 刚才对你说的那句话做出直接回应。"
+                f"发言必须以 '@{reply_to}' 开头。说话要短。"
             )
             user_content = f"@{reply_to} 对你说：\n{context}\n\n轮到你了，请直接回复 @{reply_to}（50字内）："
         else:
             reply_instruction = ""
             if reply_to:
                 reply_instruction = (
-                    f"\n\n【接话指令】你必须针对 @{reply_to} 刚才的发言进行回应。"
-                    f"你的回复必须以 '@{reply_to}' 开头（不要加引号，不要加任何前缀）。"
+                    f"\n\n【接话指令】必须针对 @{reply_to} 刚才的发言进行回应，"
+                    f"以 '@{reply_to}' 开头。"
                 )
-            system_content = f"{system_prompt}\n\n【重要指令】你现在的行为模式是：{action_type}。请务必拒绝陈词滥调，不要重复别人的句式！说话要简短有力！{reply_instruction}"
+            system_content = f"{system_prompt}\n\n【重要指令】行为模式：{action_type}。拒绝陈词滥调！说话简短有力！{reply_instruction}"
             user_content = f"当前的对话流：\n{context}\n\n轮到你了，请发言（50字内）："
 
         response = client.chat.completions.create(
@@ -94,10 +111,7 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content}
             ],
-            temperature=1.3,
-            frequency_penalty=1.0,
-            presence_penalty=0.8,
-            max_tokens=80
+            temperature=1.3, frequency_penalty=1.0, presence_penalty=0.8, max_tokens=80
         )
         content = response.choices[0].message.content.strip()
 
@@ -113,9 +127,6 @@ def render_content(content):
     return re.sub(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', r'**@\1**', content)
 
 
-# ==========================================
-# 活跃度统计 & 加权抽取
-# ==========================================
 def recent_activity(name, messages, window=8):
     return sum(1 for m in messages[-window:] if m.get("name") == name)
 
@@ -123,12 +134,10 @@ def recent_activity(name, messages, window=8):
 def pick_agent_weighted(agents, messages, exclude_name=None, window=8):
     if not agents:
         return None
-
     counts = {}
     for m in messages[-window:]:
         n = m.get("name", "")
         counts[n] = counts.get(n, 0) + 1
-
     candidates, weights = [], []
     for a in agents:
         if exclude_name and a["name"] == exclude_name and len(agents) > 1:
@@ -137,10 +146,8 @@ def pick_agent_weighted(agents, messages, exclude_name=None, window=8):
         w = 1.0 / (1.0 + c * 2.0)
         candidates.append(a)
         weights.append(w)
-
     if not candidates:
         candidates, weights = agents, [1.0] * len(agents)
-
     return random.choices(candidates, weights=weights, k=1)[0]
 
 
@@ -165,12 +172,142 @@ if "agents" not in st.session_state:
 
 if "reply_cooldown" not in st.session_state:
     st.session_state.reply_cooldown = {}
-
-# [新增] 被 kick 的 AI 集合 & 赞美模式
 if "kicked" not in st.session_state:
     st.session_state.kicked = set()
 if "gamemode" not in st.session_state:
     st.session_state.gamemode = 0
+if "imitate" not in st.session_state:
+    st.session_state.imitate = {}
+
+# [新增] 自动对话状态
+if "auto_running" not in st.session_state:
+    st.session_state.auto_running = False
+if "auto_round" not in st.session_state:
+    st.session_state.auto_round = 0
+if "auto_max" not in st.session_state:
+    st.session_state.auto_max = 8
+
+
+def add_system_note(content, avatar="⚠️"):
+    st.session_state.messages.append({
+        "name": "System",
+        "content": content,
+        "avatar": avatar,
+        "hidden": True
+    })
+
+
+# ==========================================
+# [新增] 单轮 AI 发言（原推动时间逻辑）
+# ==========================================
+def do_one_ai_round():
+    """执行一轮 AI 发言，成功返回 True。"""
+    visible_msgs = [m for m in st.session_state.messages if not m.get("hidden", False)]
+
+    if len(st.session_state.agents) == 0:
+        return False
+
+    # 赞美模式（最高优先级）
+    if st.session_state.gamemode == 1:
+        exclude = None
+        if visible_msgs:
+            last_name = visible_msgs[-1].get("name", "")
+            if last_name not in ["System", "Unknown"]:
+                exclude = last_name
+        agent = pick_agent_weighted(st.session_state.agents, visible_msgs,
+                                    exclude_name=exclude, window=8)
+        with st.spinner(f"{agent['name']} 正在赞美你..."):
+            reply = llm_generate(
+                build_system_prompt(agent, gamemode=1), "",
+                reply_to="我", reply_mode=False, gamemode=1
+            )
+        st.session_state.messages.append({
+            "name": agent["name"],
+            "content": reply,
+            "avatar": agent["avatar"]
+        })
+        return True
+
+    # 普通模式
+    available_agents = [a for a in st.session_state.agents
+                        if a["name"] not in st.session_state.kicked]
+    if not available_agents:
+        return False
+
+    current_count = len(visible_msgs)
+    agent = None
+    requester = None
+    last_content = ""
+
+    # ① 检查最新消息是否 @ 了在线 AI
+    if visible_msgs:
+        last_msg = visible_msgs[-1]
+        last_content = last_msg.get("content", "")
+        last_name = last_msg.get("name", "")
+
+        if last_name and last_name not in ["System", "Unknown"]:
+            mentioned = set(re.findall(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', last_content))
+            candidates = []
+            for m in mentioned:
+                for a in available_agents:
+                    if a["name"] != m or a["name"] == last_name:
+                        continue
+                    key = (a["name"], last_name)
+                    last_reply = st.session_state.reply_cooldown.get(key, -100)
+                    if current_count - last_reply < 5:
+                        break
+                    if len(available_agents) > 2:
+                        if recent_activity(a["name"], visible_msgs, window=6) >= 2:
+                            break
+                    candidates.append(a)
+                    break
+            if candidates:
+                agent = min(candidates, key=lambda x: recent_activity(x["name"], visible_msgs, window=8))
+                requester = last_name
+
+    # ② 加权随机
+    if agent is None:
+        exclude = None
+        if visible_msgs:
+            last_name_for_exclude = visible_msgs[-1].get("name", "")
+            if last_name_for_exclude not in ["System", "Unknown"]:
+                exclude = last_name_for_exclude
+        agent = pick_agent_weighted(available_agents, visible_msgs,
+                                    exclude_name=exclude, window=8)
+
+        reply_to = None
+        if visible_msgs:
+            last_name = visible_msgs[-1].get("name", "")
+            if last_name and last_name not in ["System", "Unknown"] and last_name != agent["name"]:
+                key = (agent["name"], last_name)
+                last_reply = st.session_state.reply_cooldown.get(key, -100)
+                if current_count - last_reply >= 5 and random.random() < 0.4:
+                    reply_to = last_name
+
+        recent = visible_msgs[-3:]
+        context_text = "\n".join([f"{m.get('name','有人')}: {m['content']}" for m in recent])
+        spinner_text = f"{agent['name']} 正在思考..."
+        if reply_to:
+            spinner_text = f"{agent['name']} 正在准备回 @{reply_to}..."
+
+        with st.spinner(spinner_text):
+            reply = llm_generate(build_system_prompt(agent), context_text,
+                                 reply_to=reply_to, reply_mode=False)
+        consume_imitate(agent["name"])
+    else:
+        # 私聊
+        with st.spinner(f"{agent['name']} 正在私聊回复 @{requester}..."):
+            reply = llm_generate(build_system_prompt(agent), last_content,
+                                 reply_to=requester, reply_mode=True)
+        st.session_state.reply_cooldown[(agent["name"], requester)] = current_count + 1
+        consume_imitate(agent["name"])
+
+    st.session_state.messages.append({
+        "name": agent["name"],
+        "content": reply,
+        "avatar": agent["avatar"]
+    })
+    return True
 
 
 # ==========================================
@@ -191,7 +328,8 @@ with st.sidebar:
                 "prompt": new_prompt,
                 "avatar": new_avatar
             })
-            st.success(f"已成功创造：{new_name}！")
+            add_system_note(f"🎉 新成员 {new_avatar} **{new_name}** 加入了论坛！", avatar="🎉")
+            st.rerun()
         else:
             st.error("请把名字和性格填完整！")
 
@@ -204,6 +342,9 @@ with st.sidebar:
             label = f"{a['avatar']} {a['name']}"
             if a["name"] in st.session_state.kicked:
                 label += " 🚫"
+            if a["name"] in st.session_state.imitate:
+                imi = st.session_state.imitate[a["name"]]
+                label += f" 🎭→{imi['target']}({imi['remaining']})"
             st.caption(label)
         with col2:
             if st.button("🗑️", key=f"del_agent_{i}", help=f"删除 {a['name']}"):
@@ -212,17 +353,21 @@ with st.sidebar:
                     if k[0] != a["name"] and k[1] != a["name"]
                 }
                 st.session_state.kicked.discard(a["name"])
+                st.session_state.imitate.pop(a["name"], None)
                 st.session_state.agents.pop(i)
                 st.rerun()
 
-    # [新增] 显示当前模式与禁言状态
     st.divider()
     if st.session_state.gamemode == 1:
-        st.success("✨ 赞美模式已开启（/gamemode 1）")
+        st.success("✨ 赞美模式已开启")
     else:
-        st.info("💬 普通模式（/gamemode 1 可开启赞美模式）")
+        st.info("💬 普通模式")
     if st.session_state.kicked:
         st.warning(f"🚫 被禁言：{', '.join(st.session_state.kicked)}")
+    if st.session_state.imitate:
+        st.info("🎭 模仿中：" + "，".join(
+            f"{k}→{v['target']}({v['remaining']})" for k, v in st.session_state.imitate.items()
+        ))
 
 
 # ==========================================
@@ -238,30 +383,22 @@ for msg in st.session_state.messages:
 # ==========================================
 # 5. 人类发言 / 指令
 # ==========================================
-user_msg = st.chat_input("输入消息，或使用指令：/kill @a、/kick @AI名、/gamemode 1")
+user_msg = st.chat_input(
+    "输入消息，或指令：/kill @a、/kick @AI名、/join @AI名、/gamemode 1、/imitate A B N"
+)
 if user_msg:
     raw = user_msg.strip()
 
-    # [新增] /gamemode 1 或 /gamemode 0
     m_gm = re.match(r"^/gamemode\s+([01])$", raw, re.IGNORECASE)
     if m_gm:
         mode = int(m_gm.group(1))
         st.session_state.gamemode = mode
         if mode == 1:
-            st.session_state.messages.append({
-                "name": "System",
-                "content": "✨ /gamemode 1 执行：所有 AI 进入最高级别赞美模式！",
-                "avatar": "✨"
-            })
+            add_system_note("✨ /gamemode 1 执行：所有 AI 进入最高级别赞美模式！", avatar="✨")
         else:
-            st.session_state.messages.append({
-                "name": "System",
-                "content": "🔙 /gamemode 0 执行：退出赞美模式。",
-                "avatar": "🔙"
-            })
+            add_system_note("🔙 /gamemode 0 执行：退出赞美模式。", avatar="🔙")
         st.rerun()
 
-    # [新增] /kill @a —— 清空所有记忆，话题重开
     if re.match(r"^/kill\s+@a$", raw, re.IGNORECASE):
         topic_msg = None
         for m in st.session_state.messages:
@@ -274,43 +411,73 @@ if user_msg:
         st.session_state.reply_cooldown = {}
         st.session_state.kicked = set()
         st.session_state.gamemode = 0
-        st.session_state.messages.append({
-            "name": "System",
-            "content": "💀 /kill @a 执行：所有 AI 记忆已清除，话题重新开始。",
-            "avatar": "💀"
-        })
+        st.session_state.imitate = {}
+        # [新增] 停止自动对话
+        st.session_state.auto_running = False
+        st.session_state.auto_round = 0
+        add_system_note("💀 /kill @a 执行：所有 AI 记忆已清除，话题重新开始。", avatar="💀")
         st.rerun()
 
-    # [新增] /kick @AI名 —— 禁言到开启新话题
     m_kick = re.match(r"^/kick\s+@(.+)$", raw, re.IGNORECASE)
     if m_kick:
         target = m_kick.group(1).strip()
         found = [a for a in st.session_state.agents if a["name"] == target]
         if found:
             st.session_state.kicked.add(target)
-            st.session_state.messages.append({
-                "name": "System",
-                "content": f"👢 /kick @{target} 执行：{target} 已被踢出，直到开启新话题。",
-                "avatar": "👢"
-            })
+            add_system_note(f"👢 /kick @{target} 执行：{target} 已被踢出，直到 /join 或新话题。", avatar="👢")
         else:
-            st.session_state.messages.append({
-                "name": "System",
-                "content": f"⚠️ 找不到 AI：{target}",
-                "avatar": "⚠️"
-            })
+            add_system_note(f"⚠️ 找不到 AI：{target}", avatar="⚠️")
         st.rerun()
 
-    # 未知指令
+    m_join = re.match(r"^/join\s+@(.+)$", raw, re.IGNORECASE)
+    if m_join:
+        target = m_join.group(1).strip()
+        found = [a for a in st.session_state.agents if a["name"] == target]
+        if not found:
+            add_system_note(f"⚠️ 找不到 AI：{target}", avatar="⚠️")
+        elif target not in st.session_state.kicked:
+            add_system_note(f"ℹ️ {target} 当前没有被禁言。", avatar="ℹ️")
+        else:
+            st.session_state.kicked.discard(target)
+            add_system_note(f"✅ /join @{target} 执行：{target} 已恢复发言权限。", avatar="✅")
+        st.rerun()
+
+    m_imit = re.match(r"^/imitate\s+(\S+)\s+(\S+)\s+(\d+)$", raw, re.IGNORECASE)
+    if m_imit:
+        who = m_imit.group(1).lstrip("@").strip()
+        whom = m_imit.group(2).lstrip("@").strip()
+        rounds = int(m_imit.group(3))
+
+        who_exists = any(a["name"] == who for a in st.session_state.agents)
+        target_agent = next((a for a in st.session_state.agents if a["name"] == whom), None)
+
+        if not who_exists:
+            add_system_note(f"⚠️ /imitate 失败：找不到模仿者 {who}", avatar="⚠️")
+        elif not target_agent:
+            add_system_note(f"⚠️ /imitate 失败：找不到被模仿者 {whom}", avatar="⚠️")
+        elif rounds <= 0:
+            add_system_note(f"⚠️ /imitate 失败：回合数必须 > 0", avatar="⚠️")
+        elif who == whom:
+            add_system_note(f"⚠️ /imitate 失败：不能让 {who} 模仿自己", avatar="⚠️")
+        else:
+            st.session_state.imitate[who] = {
+                "target": whom,
+                "target_prompt": target_agent["prompt"],
+                "remaining": rounds
+            }
+            add_system_note(
+                f"🎭 /imitate 执行：{who} 将在接下来 {rounds} 次发言中模仿 {whom}。",
+                avatar="🎭"
+            )
+        st.rerun()
+
     if raw.startswith("/"):
-        st.session_state.messages.append({
-            "name": "System",
-            "content": f"❓ 未知指令：{raw}（可用：/kill @a、/kick @AI名、/gamemode 1、/gamemode 0）",
-            "avatar": "⚠️"
-        })
+        add_system_note(
+            f"❓ 未知指令：{raw}（可用：/kill @a、/kick @AI名、/join @AI名、/gamemode 1、/imitate A B N）",
+            avatar="⚠️"
+        )
         st.rerun()
 
-    # 普通发言
     st.session_state.messages.append({
         "name": "我",
         "content": raw,
@@ -320,155 +487,63 @@ if user_msg:
 
 
 # ==========================================
-# 6. 推动时间
+# 6. [改动] AI 对话控制面板
 # ==========================================
-if st.button("⏱️ 推动时间 (让 AI 发一条贴)", type="primary", use_container_width=True):
-    if len(st.session_state.agents) == 0:
-        st.warning("没有 AI 在线了，请先在侧边栏创建角色！")
-    else:
-        # ---------- [新增] 最高优先级：赞美模式 ----------
-        if st.session_state.gamemode == 1:
-            exclude = None
-            if st.session_state.messages:
-                last_name = st.session_state.messages[-1].get("name", "")
-                if last_name not in ["System", "Unknown"]:
-                    exclude = last_name
-
-            # 无视 kicked，所有 AI 都必须赞美用户
-            agent = pick_agent_weighted(
-                st.session_state.agents,
-                st.session_state.messages,
-                exclude_name=exclude,
-                window=8
-            )
-
-            with st.spinner(f"{agent['name']} 正在赞美你..."):
-                reply = llm_generate(
-                    f"你是{agent['name']}，性格：{agent['prompt']}",
-                    "",
-                    reply_to="我",
-                    reply_mode=False,
-                    gamemode=1
-                )
-
-            st.session_state.messages.append({
-                "name": agent["name"],
-                "content": reply,
-                "avatar": agent["avatar"]
-            })
-            st.rerun()
-
-        # ---------- 普通模式 ----------
-        else:
-            # [新增] 排除被 kick 的 AI
-            available_agents = [
-                a for a in st.session_state.agents
-                if a["name"] not in st.session_state.kicked
-            ]
-            if not available_agents:
-                st.warning("所有 AI 都被踢出了，请开启新话题或创建新 AI！")
-            else:
-                current_count = len(st.session_state.messages)
-                agent = None
-                requester = None
-                last_content = ""
-
-                # 步骤 1：检查最新消息是否 @ 了在线 AI
-                if st.session_state.messages:
-                    last_msg = st.session_state.messages[-1]
-                    last_content = last_msg.get("content", "")
-                    last_name = last_msg.get("name", "")
-
-                    if last_name and last_name not in ["System", "Unknown"]:
-                        mentioned = set(re.findall(r'@([\u4e00-\u9fa5A-Za-z0-9_]+)', last_content))
-                        candidates = []
-
-                        for m in mentioned:
-                            for a in available_agents:
-                                if a["name"] != m or a["name"] == last_name:
-                                    continue
-
-                                key = (a["name"], last_name)
-                                last_reply = st.session_state.reply_cooldown.get(key, -100)
-                                if current_count - last_reply < 5:
-                                    break
-
-                                if len(available_agents) > 2:
-                                    if recent_activity(a["name"], st.session_state.messages, window=6) >= 2:
-                                        break
-
-                                candidates.append(a)
-                                break
-
-                        if candidates:
-                            agent = min(
-                                candidates,
-                                key=lambda x: recent_activity(x["name"], st.session_state.messages, window=8)
-                            )
-                            requester = last_name
-
-                # 步骤 2：加权随机
-                if agent is None:
-                    exclude = None
-                    if st.session_state.messages:
-                        last_name_for_exclude = st.session_state.messages[-1].get("name", "")
-                        if last_name_for_exclude not in ["System", "Unknown"]:
-                            exclude = last_name_for_exclude
-
-                    agent = pick_agent_weighted(
-                        available_agents,
-                        st.session_state.messages,
-                        exclude_name=exclude,
-                        window=8
-                    )
-
-                    reply_to = None
-                    if st.session_state.messages:
-                        last_msg = st.session_state.messages[-1]
-                        last_name = last_msg.get("name", "")
-                        if last_name and last_name not in ["System", "Unknown"] and last_name != agent["name"]:
-                            key = (agent["name"], last_name)
-                            last_reply = st.session_state.reply_cooldown.get(key, -100)
-                            if current_count - last_reply >= 5 and random.random() < 0.4:
-                                reply_to = last_name
-
-                    recent_msgs = st.session_state.messages[-3:]
-                    context_text = "\n".join([f"{m.get('name','有人')}: {m['content']}" for m in recent_msgs])
-
-                    spinner_text = f"{agent['name']} 正在思考..."
-                    if reply_to:
-                        spinner_text = f"{agent['name']} 正在准备回 @{reply_to}..."
-
-                    with st.spinner(spinner_text):
-                        reply = llm_generate(
-                            f"你是{agent['name']}，性格：{agent['prompt']}",
-                            context_text,
-                            reply_to=reply_to,
-                            reply_mode=False
-                        )
-                else:
-                    # 私聊模式
-                    with st.spinner(f"{agent['name']} 正在私聊回复 @{requester}..."):
-                        reply = llm_generate(
-                            f"你是{agent['name']}，性格：{agent['prompt']}",
-                            last_content,
-                            reply_to=requester,
-                            reply_mode=True
-                        )
-                    st.session_state.reply_cooldown[(agent["name"], requester)] = current_count + 1
-
-                st.session_state.messages.append({
-                    "name": agent["name"],
-                    "content": reply,
-                    "avatar": agent["avatar"]
-                })
-                st.rerun()
-
 st.divider()
+st.subheader("🎬 AI 对话控制")
+
+col1, col2, col3 = st.columns([2, 1, 1])
+with col1:
+    max_rounds = st.number_input(
+        "最多轮数（1-8）",
+        min_value=1, max_value=8,
+        value=st.session_state.auto_max,
+        key="rounds_input"
+    )
+with col2:
+    if st.button("▶️ 开始", type="primary",
+                 disabled=st.session_state.auto_running,
+                 use_container_width=True):
+        st.session_state.auto_running = True
+        st.session_state.auto_round = 0
+        st.session_state.auto_max = int(max_rounds)
+        st.rerun()
+with col3:
+    if st.button("⏹️ 停止",
+                 disabled=not st.session_state.auto_running,
+                 use_container_width=True):
+        st.session_state.auto_running = False
+        st.rerun()
+
+if st.session_state.auto_running:
+    st.progress(
+        min(st.session_state.auto_round / max(st.session_state.auto_max, 1), 1.0),
+        text=f"🔄 AI 对话中：已完成 {st.session_state.auto_round}/{st.session_state.auto_max} 轮"
+    )
+
+# ==========================================
+# [改动] 自动执行：一次 rerun 跑一轮
+# ==========================================
+if st.session_state.auto_running:
+    if st.session_state.auto_round >= st.session_state.auto_max:
+        st.session_state.auto_running = False
+        st.rerun()
+    else:
+        success = do_one_ai_round()
+        if success:
+            st.session_state.auto_round += 1
+            if st.session_state.auto_round >= st.session_state.auto_max:
+                st.session_state.auto_running = False
+        else:
+            st.session_state.auto_running = False
+            st.warning("⚠️ 无法继续对话（所有 AI 都被踢出或未创建 AI）")
+        st.rerun()
+
 
 # ==========================================
 # 7. 上帝干预
 # ==========================================
+st.divider()
 st.subheader("⚡ 上帝干预")
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -485,6 +560,9 @@ with col2:
                 "avatar": "🌩️"
             })
             st.session_state.reply_cooldown = {}
-            # [新增] 开启新话题 → 解除所有 kick
             st.session_state.kicked = set()
+            st.session_state.imitate = {}
+            # [新增] 停止自动对话
+            st.session_state.auto_running = False
+            st.session_state.auto_round = 0
             st.rerun()
