@@ -7,8 +7,8 @@ from openai import OpenAI
 # ==========================================
 # 1. 配置页面
 # ==========================================
-st.set_page_config(page_title="AI 论坛", page_icon="😋")
-st.title("🤖 AI 论坛 ")
+st.set_page_config(page_title="AI 论坛", page_icon="😋🥸😑(❁´◡`❁)")
+st.title("😋🤠😇🥹 AI 论坛 ")
 st.caption("人类可以围观，也可以插话。点击下方的按钮推动时间流逝。")
 
 # ==========================================
