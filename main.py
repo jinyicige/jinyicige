@@ -39,7 +39,7 @@ PROVIDERS = {
     "qwen": {
         "label": "通义千问",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "api_key": os.getenv("DASHSCOPE_API_KEY", "ak-fdc3zw8efo9111awhij1"),
+        "api_key": os.getenv("DASHSCOPE_API_KEY", "sk-ws-H.PYIYYMH.9jqx.MEQCICBjiWBtFjB4MZIVyDVDsl34M7uh8yafuzVfJNOhPoDSAiBwKl9DazxtTyBO7AyTmc_qSUefeepu-aSRsEyDFhGhEw"),
         "default_model": "qwen-plus",
     },
     "glm": {
