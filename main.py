@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import random
 import re
+import os
 from openai import OpenAI
 
 st.set_page_config(page_title="AI 论坛", page_icon="😋")
@@ -18,8 +19,49 @@ except:
 
 USE_MOCK_MODE = False
 
-if not USE_MOCK_MODE:
-    client = OpenAI(api_key=MY_API_KEY, base_url="https://api.deepseek.com")
+# ==========================================
+# 2.5 多厂商模型配置
+# ==========================================
+PROVIDERS = {
+    "deepseek": {
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": os.getenv("DEEPSEEK_API_KEY", MY_API_KEY),
+        "default_model": "deepseek-chat",
+    },
+    "doubao": {
+        "label": "豆包 (火山方舟)",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": os.getenv("ARK_API_KEY", ""),
+        # 必须替换为你自己的 Endpoint ID，例如 "ep-2026xxxx-xxxxx"
+        "default_model": os.getenv("DOUBAO_ENDPOINT_ID", ""),
+    },
+    "qwen": {
+        "label": "通义千问",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": os.getenv("DASHSCOPE_API_KEY", "sk-ws-H.PYIYLRI.atxw.MEYCIQDWs5lmSiyMwly4yEbsF4olFf4mXBBPauyoALU3CiKrxQIhAJuZFKmvcbBJtu1PkJLMgnJUuSqnjUbOgJGhYYmz9tun"),
+        "default_model": "qwen-plus",
+    },
+    "glm": {
+        "label": "智谱 GLM",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "api_key": os.getenv("ZHIPU_API_KEY", ""),
+        "default_model": "glm-4-flash",
+    },
+    "kimi": {
+        "label": "Kimi (Moonshot)",
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-1mFRAVd6OSgczZdaFrGiXghMro4aOuZbDVPALRFJrvNmbYwT"),
+        "default_model": "moonshot-v1-8k",
+    },
+}
+
+
+def get_client(provider: str) -> OpenAI:
+    cfg = PROVIDERS[provider]
+    if not cfg["api_key"]:
+        raise ValueError(f"未配置 {cfg['label']} 的 API Key")
+    return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
 
 
 def build_system_prompt(agent, gamemode=0):
@@ -46,7 +88,10 @@ def consume_imitate(agent_name):
             del st.session_state.imitate[agent_name]
 
 
-def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemode=0):
+def llm_generate(agent, system_prompt, context, reply_to=None, reply_mode=False, gamemode=0):
+    provider = agent["provider"]
+    model = agent["model"]
+
     if USE_MOCK_MODE:
         time.sleep(1)
         if gamemode == 1:
@@ -56,6 +101,8 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
         return f"@{reply_to} 模拟回复..." if reply_to else "模拟回复..."
 
     try:
+        client = get_client(provider)
+
         if gamemode == 1:
             system_content = (
                 f"{system_prompt}\n\n"
@@ -65,7 +112,7 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
                 f"只能赞美用户，内容可以肉麻、崇拜、拍马屁。50 字内。"
             )
             response = client.chat.completions.create(
-                model="deepseek-chat",
+                model=model,
                 messages=[
                     {"role": "system", "content": system_content},
                     {"role": "user", "content": "请开始赞美用户 @我。"}
@@ -106,7 +153,7 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
             user_content = f"当前的对话流：\n{context}\n\n轮到你了，请发言（50字内）："
 
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model,
             messages=[
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content}
@@ -120,7 +167,7 @@ def llm_generate(system_prompt, context, reply_to=None, reply_mode=False, gamemo
 
         return content
     except Exception as e:
-        return f"（大脑过载: {str(e)}）"
+        return f"（{PROVIDERS[agent['provider']]['label']} 调用失败: {str(e)}）"
 
 
 def render_content(content):
@@ -164,11 +211,20 @@ if "messages" not in st.session_state or len(st.session_state.messages) == 0:
 
 if "agents" not in st.session_state:
     st.session_state.agents = [
-        {"name": "哲学家", "prompt": "悲观，虚无主义", "avatar": "🗿"},
-        {"name": "杠精", "prompt": "暴躁，反驳一切", "avatar": "😡"},
-        {"name": "萌妹", "prompt": "可爱，爱发颜文字", "avatar": "🐱"},
-        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar": "🫥"},
+        {"name": "哲学家", "prompt": "悲观，虚无主义", "avatar": "🗿",
+         "provider": "deepseek", "model": "deepseek-chat"},
+        {"name": "杠精", "prompt": "暴躁，反驳一切", "avatar": "😡",
+         "provider": "deepseek", "model": "deepseek-chat"},
+        {"name": "萌妹", "prompt": "可爱，爱发颜文字", "avatar": "🐱",
+         "provider": "qwen", "model": "qwen-plus"},
+        {"name": "大卫带", "prompt": "贪吃，什么话题都能扯上吃的", "avatar": "🫥",
+         "provider": "glm", "model": "glm-4-flash"},
     ]
+
+# 兼容旧 session：为缺少 provider/model 的 Agent 补全字段
+for a in st.session_state.agents:
+    a.setdefault("provider", "deepseek")
+    a.setdefault("model", "deepseek-chat")
 
 if "reply_cooldown" not in st.session_state:
     st.session_state.reply_cooldown = {}
@@ -218,7 +274,7 @@ def do_one_ai_round():
                                     exclude_name=exclude, window=8)
         with st.spinner(f"{agent['name']} 正在赞美你..."):
             reply = llm_generate(
-                build_system_prompt(agent, gamemode=1), "",
+                agent, build_system_prompt(agent, gamemode=1), "",
                 reply_to="我", reply_mode=False, gamemode=1
             )
         st.session_state.messages.append({
@@ -291,13 +347,13 @@ def do_one_ai_round():
             spinner_text = f"{agent['name']} 正在准备回 @{reply_to}..."
 
         with st.spinner(spinner_text):
-            reply = llm_generate(build_system_prompt(agent), context_text,
+            reply = llm_generate(agent, build_system_prompt(agent), context_text,
                                  reply_to=reply_to, reply_mode=False)
         consume_imitate(agent["name"])
     else:
         # 私聊
         with st.spinner(f"{agent['name']} 正在私聊回复 @{requester}..."):
-            reply = llm_generate(build_system_prompt(agent), last_content,
+            reply = llm_generate(agent, build_system_prompt(agent), last_content,
                                  reply_to=requester, reply_mode=True)
         st.session_state.reply_cooldown[(agent["name"], requester)] = current_count + 1
         consume_imitate(agent["name"])
@@ -321,17 +377,42 @@ with st.sidebar:
     new_prompt = st.text_area("性格/人设", placeholder="例如：喜欢吹嘘自己没做过的事，蹩脚英文")
     new_avatar = st.selectbox("选择头像", ["😇", "😋", "🥸", "😶", "🤠", "😭", "😖", "🍟", "🤬"])
 
+    provider_keys = list(PROVIDERS.keys())
+    new_provider = st.selectbox(
+        "模型厂商",
+        provider_keys,
+        format_func=lambda k: PROVIDERS[k]["label"],
+        index=0
+    )
+
+    default_model = PROVIDERS[new_provider]["default_model"]
+    new_model = st.text_input(
+        "模型 ID / Endpoint ID",
+        value=default_model,
+        key=f"model_input_{new_provider}",
+        help=(
+            "豆包请填火山方舟的 Endpoint ID（ep- 开头）或具体模型 ID，"
+            "不能填 doubao-lite 这类通用名；其他厂商填文档中的模型名。"
+        )
+    )
+
     if st.button("⚡ 注入灵魂 (创建)", type="primary"):
-        if new_name and new_prompt:
+        if new_name and new_prompt and new_model:
             st.session_state.agents.append({
                 "name": new_name,
                 "prompt": new_prompt,
-                "avatar": new_avatar
+                "avatar": new_avatar,
+                "provider": new_provider,
+                "model": new_model,
             })
-            add_system_note(f"🎉 新成员 {new_avatar} **{new_name}** 加入了论坛！", avatar="🎉")
+            add_system_note(
+                f"🎉 新成员 {new_avatar} **{new_name}** 加入了论坛！"
+                f"（{PROVIDERS[new_provider]['label']} · {new_model}）",
+                avatar="🎉"
+            )
             st.rerun()
         else:
-            st.error("请把名字和性格填完整！")
+            st.error("名字、人设、模型 ID 都需要填写。")
 
     st.divider()
 
@@ -339,7 +420,8 @@ with st.sidebar:
     for i, a in enumerate(st.session_state.agents):
         col1, col2 = st.columns([4, 1])
         with col1:
-            label = f"{a['avatar']} {a['name']}"
+            prov_label = PROVIDERS.get(a.get("provider", "deepseek"), {}).get("label", "?")
+            label = f"{a['avatar']} {a['name']} · {prov_label}"
             if a["name"] in st.session_state.kicked:
                 label += " 🚫"
             if a["name"] in st.session_state.imitate:
