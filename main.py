@@ -51,7 +51,7 @@ PROVIDERS = {
     "kimi": {
         "label": "Kimi (Moonshot)",
         "base_url": "https://api.moonshot.cn/v1",
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-1mFRAVd6OSgczZdaFrGiXghMro4aOuZbDVPALRFJrvNmbYwT"),
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-sgVCPv7qERg50Veks0DW4bZgqENsLVcP4AllGrGjpqeinkHK"),
         "default_model": "moonshot-v1-8k",
     },
 }
